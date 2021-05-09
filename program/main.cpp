@@ -10,18 +10,19 @@
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
-
+#include "mbed_rpc.h"
 
 // Initialize a pins to perform analog and digital output functions
 // Adjust analog output pin name to your board spec.
 uLCD_4DGL uLCD(D1, D0, D2); 
 InterruptIn btn(USER_BUTTON);
-EventQueue queue(32 * EVENTS_EVENT_SIZE);
-Thread t;
-
+Thread t,mqtt_thread;
 int mode=0;
 int n=10;
 int UI_state=1;
+EventQueue queue;
+BufferedSerial pc(USBTX, USBRX);
+
 
 // Create an area of memory to use for input, output, and intermediate arrays.
 // The size of this will depend on the model you're using, and may need to be
@@ -127,43 +128,11 @@ void change_mode(int mode_in){
     }
 }
 
-void select_mode(int mode_in){
-    int row_now = mode_in+2;
-    uLCD.locate(0,row_now);
-    uLCD.color(RED);
-    uLCD.printf(" >"); 
-    // uLCD.rectangle(1,1,2,2, WHITE);
-}
-
-void release_mode(int mode_in){
-    int row_now = mode_in+2;
-    uLCD.locate(0,row_now);
-    uLCD.color(WHITE);
-    uLCD.printf(" >"); 
-}
-
-void angle_display(){
-    BSP_ACCELERO_AccGetXYZ(pDataXYZ);
-    printf("%d, %d, %d\n", pDataXYZ[0], pDataXYZ[1], pDataXYZ[2]);
-}
-
-void tilt_angle(){
-    int16_t pDataXYZ[3] = {0};
-    BSP_ACCELERO_Init();
-    while(1){
-
-        angle_display();
-
-    }
-}
-
-int main(void)
+void gesture(Arguments *in, Reply *out)
 {
+    int x = in->getArg<int>();
     display();
     ThisThread::sleep_for(1s);
-    change_mode(0);
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
-
     // Whether we should clear the buffer next time we fetch data
     bool should_clear_buffer = false;
     bool got_data = false;
@@ -183,7 +152,6 @@ int main(void)
             "Model provided is schema version %d not equal "
             "to supported version %d.",
             model->version(), TFLITE_SCHEMA_VERSION);
-        return -1;
     }
 
     // Pull in only the operation implementations we need.
@@ -194,17 +162,17 @@ int main(void)
     static tflite::MicroOpResolver<6> micro_op_resolver;
     micro_op_resolver.AddBuiltin(
         tflite::BuiltinOperator_DEPTHWISE_CONV_2D,
-         tflite::ops::micro::Register_DEPTHWISE_CONV_2D());
+        tflite::ops::micro::Register_DEPTHWISE_CONV_2D());
     micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_MAX_POOL_2D,
-                                               tflite::ops::micro::Register_MAX_POOL_2D());
+                                tflite::ops::micro::Register_MAX_POOL_2D());
     micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_CONV_2D,
-                                               tflite::ops::micro::Register_CONV_2D());
+                                tflite::ops::micro::Register_CONV_2D());
     micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_FULLY_CONNECTED,
-                                               tflite::ops::micro::Register_FULLY_CONNECTED());
+                                tflite::ops::micro::Register_FULLY_CONNECTED());
     micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_SOFTMAX,
-                                               tflite::ops::micro::Register_SOFTMAX());
+                                tflite::ops::micro::Register_SOFTMAX());
     micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_RESHAPE,
-                                               tflite::ops::micro::Register_RESHAPE(), 1);
+                                tflite::ops::micro::Register_RESHAPE(), 1);
 
     // Build an interpreter to run the model with
     static tflite::MicroInterpreter static_interpreter(
@@ -220,22 +188,24 @@ int main(void)
         (model_input->dims->data[1] != config.seq_length) ||
         (model_input->dims->data[2] != kChannelNumber) ||
         (model_input->type != kTfLiteFloat32)) {
-      error_reporter->Report("Bad input tensor parameters in model");
-      return -1;
+        error_reporter->Report("Bad input tensor parameters in model");
+
     }
 
     int input_length = model_input->bytes / sizeof(float);
 
     TfLiteStatus setup_status = SetupAccelerometer(error_reporter);
     if (setup_status != kTfLiteOk) {
-      error_reporter->Report("Set up failed\n");
-      return -1;
+        error_reporter->Report("Set up failed\n");
+
     }
 
     error_reporter->Report("Set up successful...\n");
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
     while (1) {
 
       // Attempt to read new data from the accelerometer
@@ -277,9 +247,41 @@ int main(void)
             mode=4;
         if(mode_temp!=mode)
             change_mode(mode);
-    btn.fall(queue.event(tilt_angle));
+    // btn.fall(mqtt_queue.event(&publish_message, &client));
+    
 
   }
 
         ThisThread::sleep_for(100ms);
+}
+RPCFunction rpcGesture(&gesture, "gesture");
+
+
+int main(){
+
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    // mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
+
+    // receive commands, and send back the responses
+    char buf[256], outbuf[256];
+
+    FILE *devin = fdopen(&pc, "r");
+    FILE *devout = fdopen(&pc, "w");
+
+    while(1) {
+        memset(buf, 0, 256);
+        for (int i = 0; ; i++) {
+            char recv = fgetc(devin);
+            if (recv == '\n') {
+                printf("\r\n");
+                break;
+            }
+            buf[i] = fputc(recv, devout);
+        }
+        //Call the static call method on the RPC class
+        RPC::call(buf, outbuf);
+        printf("%s\r\n", outbuf);
+    }
+
+
 }
