@@ -10,7 +10,7 @@ line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC repl
 print(line)
 time.sleep(1)
 
-s.write(bytes("/gesture_activate/run\r", 'UTF-8'))
+s.write(bytes("/gesture_terminate/run\r", 'UTF-8'))
 line=s.readline() # Read an echo string from mbed terminated with '\n' (putc())
 print(line)
 line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC reply)

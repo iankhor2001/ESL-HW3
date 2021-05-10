@@ -20,7 +20,7 @@ Thread t,mqtt_thread;
 int mode=0;
 int n=10;
 int UI_state=1;
-EventQueue queue;
+EventQueue gesture_queue;
 BufferedSerial pc(USBTX, USBRX);
 
 
@@ -128,9 +128,9 @@ void change_mode(int mode_in){
     }
 }
 
-void gesture(Arguments *in, Reply *out)
+void gesture()
 {
-    int x = in->getArg<int>();
+
     display();
     ThisThread::sleep_for(1s);
     // Whether we should clear the buffer next time we fetch data
@@ -254,12 +254,22 @@ void gesture(Arguments *in, Reply *out)
 
         ThisThread::sleep_for(100ms);
 }
-RPCFunction rpcGesture(&gesture, "gesture");
+
+void gesture_activate(Arguments *in, Reply *out){
+    t.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
+    gesture_queue.call(gesture);
+}
+void gesture_terminate(Arguments *in, Reply *out){
+    t.terminate();
+    uLCD.cls();
+}
+
+RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
+RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
 
 
 int main(){
 
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
     // mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
 
     // receive commands, and send back the responses
