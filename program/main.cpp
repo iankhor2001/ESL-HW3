@@ -295,63 +295,74 @@ Thread acce_thread;
 EventQueue tilt_queue;
 EventQueue acce_queue;
 double tilt_angle_deg=0, ref_angle_deg=0;
-int16_t pDataXYZ_tilt[3] = {0};
+int16_t pDataXYZ_tilt[3] = {0}, init_pDataXYZ_tilt[3]={999,999,999};
 int running = 1;
 int over_max_times=0;
+int init_angle_confirm=0;
 void tilt_init(){
-    BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
-    double ref_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
+    BSP_ACCELERO_AccGetXYZ(init_pDataXYZ_tilt);
+    double ref_angle_rad = acos ( init_pDataXYZ_tilt[2]/ sqrt( pow(init_pDataXYZ_tilt[0],2) + pow(init_pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
     ref_angle_deg = ref_angle_rad  * 180.0 / PI;
+    init_angle_confirm=1;
 }
 void tilt_angle(){
-    BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
-    double tilt_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
-    tilt_angle_deg = tilt_angle_rad  * 180.0 / PI;
-    int tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
-    uLCD.text_width(2); 
-    uLCD.text_height(2);
-    uLCD.locate(1,1);
-    uLCD.printf("Max: %d", angle[mode]);
-    uLCD.text_width(3); 
-    uLCD.text_height(3);
-    uLCD.locate(1,2);
-    uLCD.printf("deg:", int(tilting)); 
-    uLCD.locate(1,3);
-    uLCD.printf("%3d", int(tilting)); 
-
-    if(tilting>=angle[mode]) {
-        uLCD.text_width(1); 
-        uLCD.text_height(1);
-        uLCD.locate(0,0);
-        uLCD.color(RED);
-        uLCD.printf("OVER #%d", over_max_times);
-        over_max_times=over_max_times+1;
-        uLCD.color(GREEN);
+    while(running){
+        BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
+        double tilt_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
+        tilt_angle_deg = tilt_angle_rad  * 180.0 / PI;
+        int tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
         uLCD.text_width(2); 
         uLCD.text_height(2);
-        ThisThread::sleep_for(1s);
+        uLCD.locate(1,1);
+        uLCD.printf("Max: %d", angle[mode]);
+        uLCD.text_width(3); 
+        uLCD.text_height(3);
+        uLCD.locate(1,2);
+        uLCD.printf("deg:"); 
+        uLCD.locate(1,3);
+        if(tilting>=angle[mode]) uLCD.color(RED);
+        else uLCD.color(GREEN);
+        uLCD.printf("%3d", int(tilting)); 
+
+        if(tilting>=angle[mode]) {
+            uLCD.text_width(1); 
+            uLCD.text_height(1);
+            uLCD.locate(0,0);
+            uLCD.color(RED);
+            uLCD.printf("OVER #%d", over_max_times);
+            over_max_times=over_max_times+1;
+            uLCD.color(GREEN);
+            uLCD.text_width(2); 
+            uLCD.text_height(2);
+            ThisThread::sleep_for(1s);
+        }
+        if(over_max_times==5) running=0;
+        // if(tilting>=angle[mode]) running = 0;
+        ThisThread::sleep_for(100ms);
     }
-    if(over_max_times==5) running=0;
-    // if(tilting>=angle[mode]) running = 0;
 }
 
 void tilt_op(){
-    // btn.fall(mqtt_queue.event(publish_angle));
+    init_angle_confirm=0;
     uLCD.cls();
     running = 1;
     BSP_ACCELERO_Init();
     led2=1;
-    // acce_thread.start(callback(&acce_queue, &EventQueue::dispatch_forever));
-    tilt_init();
+    while(init_angle_confirm==0){
+        uLCD.text_width(2); 
+        uLCD.text_height(2);
+        uLCD.locate(1,0);
+        uLCD.printf("PUSH\n BUTTON\n TO\n INIT"); 
+        btn.fall(tilt_init);
+    }
+    uLCD.cls();
     uLCD.text_width(1); 
     uLCD.text_height(1);
     uLCD.locate(1,0);
-    uLCD.printf("ref: %d ", int(ref_angle_deg)); 
+    uLCD.printf("ref: %d,%d,%d", init_pDataXYZ_tilt[0],init_pDataXYZ_tilt[1],init_pDataXYZ_tilt[2]); 
     over_max_times=0;
-    while(running){
-        tilt_angle();
-        ThisThread::sleep_for(100ms);
-    }
+    tilt_angle();
+    ThisThread::sleep_for(100ms);
     uLCD.cls();
 }
 
