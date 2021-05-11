@@ -16,11 +16,12 @@
 // Adjust analog output pin name to your board spec.
 uLCD_4DGL uLCD(D1, D0, D2); 
 InterruptIn btn(USER_BUTTON);
-Thread t,mqtt_thread;
-int mode=0;
+Thread gesT,tiltT,mqtt_thread;
+int mode=1;
+int angle[6]={15,20,25,30,35,40};
 int n=10;
 int UI_state=1;
-EventQueue gesture_queue;
+EventQueue gesture_queue,tilt_queue,mqtt_queue;
 BufferedSerial pc(USBTX, USBRX);
 
 
@@ -70,7 +71,10 @@ int PredictGesture(float* output) {
     return this_predict;
 }
 
-void display(){
+void gesture_display(){
+    uLCD.locate(0,0);
+    uLCD.printf("Gesture Mode");
+
     uLCD.text_width(2); 
     uLCD.text_height(2);
     uLCD.locate(0,1);
@@ -83,21 +87,21 @@ void display(){
     uLCD.locate(0,2);
     uLCD.color(GREEN);
     uLCD.printf(" >"); 
-    uLCD.printf("  20"); 
+    uLCD.printf(" 20"); 
 
     uLCD.text_width(2); 
     uLCD.text_height(2);
     uLCD.locate(0,3);
     uLCD.color(GREEN);
     uLCD.printf(" >"); 
-    uLCD.printf("  25"); 
+    uLCD.printf(" 25"); 
   
     uLCD.text_width(2); 
     uLCD.text_height(2);
     uLCD.locate(0,4);
     uLCD.color(GREEN);
     uLCD.printf(" >"); 
-    uLCD.printf("  30");
+    uLCD.printf(" 30");
 
     uLCD.text_width(2); 
     uLCD.text_height(2);
@@ -115,7 +119,7 @@ void display(){
 }
 
 void change_mode(int mode_in){
-    int row_now = mode_in+2;
+    int row_now = mode_in+1;
     for(int num=1;num<=6;num++){
         uLCD.locate(0,num);
         if (num==row_now){
@@ -130,8 +134,7 @@ void change_mode(int mode_in){
 
 void gesture()
 {
-
-    display();
+    gesture_display();
     ThisThread::sleep_for(1s);
     // Whether we should clear the buffer next time we fetch data
     bool should_clear_buffer = false;
@@ -200,7 +203,7 @@ void gesture()
 
     }
 
-    error_reporter->Report("Set up successful...\n");
+    //error_reporter->Report("Set up successful...\n");
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -233,9 +236,9 @@ void gesture()
     should_clear_buffer = gesture_index < label_num;
 
     // Produce an output
-    if (gesture_index < label_num) {
-        error_reporter->Report(config.output_message[gesture_index]);
-    }
+    // if (gesture_index < label_num) {
+    //     error_reporter->Report(config.output_message[gesture_index]);
+    // }
     int mode_temp = mode;
         if (gesture_index==1)
             mode++;
@@ -256,28 +259,48 @@ void gesture()
 }
 
 void gesture_activate(Arguments *in, Reply *out){
-    t.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
+    uLCD.cls();
+    gesT.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
     gesture_queue.call(gesture);
 }
 void gesture_terminate(Arguments *in, Reply *out){
-    t.terminate();
+    gesT.terminate();
     uLCD.cls();
+    uLCD.locate(0,1);
+    uLCD.printf("gesture");
+    uLCD.locate(0,2);
+    uLCD.printf("Angle = %d",angle[mode]);
 }
-
 RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
 RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
 
+void tilt_activate(Arguments *in, Reply *out){
+    uLCD.cls();
+    tiltT.start(callback(&tilt_queue, &EventQueue::dispatch_forever));
+}
+void tilt_terminate(Arguments *in, Reply *out){
+    tiltT.terminate();
+    uLCD.cls();
+    uLCD.locate(0,1);
+    uLCD.printf("MENU");
+    uLCD.locate(0,2);
+    uLCD.printf("Angle = %d",angle[mode]);
+}
+RPCFunction rpcTiltActive(&tilt_activate, "tilt_activate");
+RPCFunction rpcTiltDeactive(&tilt_terminate, "tilt_terminate");
 
 int main(){
-
     // mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
 
+    uLCD.locate(0,1);
+    uLCD.printf("MENU");
+    uLCD.locate(0,2);
+    uLCD.printf("Angle = %d",angle[mode]);
+    
     // receive commands, and send back the responses
     char buf[256], outbuf[256];
-
     FILE *devin = fdopen(&pc, "r");
     FILE *devout = fdopen(&pc, "w");
-
     while(1) {
         memset(buf, 0, 256);
         for (int i = 0; ; i++) {
