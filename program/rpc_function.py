@@ -1,6 +1,6 @@
 import serial
 import time
-serdev = '/dev/ttyACM10'
+serdev = '/dev/ttyACM11'
 s = serial.Serial(serdev, 9600)
 
 def terminate_gesture():

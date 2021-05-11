@@ -297,6 +297,7 @@ EventQueue acce_queue;
 double tilt_angle_deg=0, ref_angle_deg=0;
 int16_t pDataXYZ_tilt[3] = {0};
 int running = 1;
+int over_max_times=0;
 void tilt_init(){
     BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
     double ref_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
@@ -317,17 +318,21 @@ void tilt_angle(){
     uLCD.printf("deg:", int(tilting)); 
     uLCD.locate(1,3);
     uLCD.printf("%3d", int(tilting)); 
-    // for(int i=1;i<=10;){
-    //     if(tilting>=angle[mode]) {
-    //         uLCD.locate(1,4);
-    //         uLCD.color(RED);
-    //         uLCD.printf("OVER #%d", i++);
-    //         uLCD.color(GREEN);
-    //         ThisThread::sleep_for(1s);
-    //     }
 
-    // }
-    if(tilting>=angle[mode]) running=0;
+    if(tilting>=angle[mode]) {
+        uLCD.text_width(1); 
+        uLCD.text_height(1);
+        uLCD.locate(0,0);
+        uLCD.color(RED);
+        uLCD.printf("OVER #%d", over_max_times);
+        over_max_times=over_max_times+1;
+        uLCD.color(GREEN);
+        uLCD.text_width(2); 
+        uLCD.text_height(2);
+        ThisThread::sleep_for(1s);
+    }
+    if(over_max_times==5) running=0;
+    // if(tilting>=angle[mode]) running = 0;
 }
 
 void tilt_op(){
@@ -342,6 +347,7 @@ void tilt_op(){
     uLCD.text_height(1);
     uLCD.locate(1,0);
     uLCD.printf("ref: %d ", int(ref_angle_deg)); 
+    over_max_times=0;
     while(running){
         tilt_angle();
         ThisThread::sleep_for(100ms);
