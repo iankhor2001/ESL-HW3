@@ -1,6 +1,6 @@
 #include "mbed.h"
 #include "uLCD_4DGL.h"
-#include "config.h"
+#include "TFconfig.h"
 #include <cmath>
 #include "magic_wand_model_data.h"
 #include "accelerometer_handler.h"
@@ -13,6 +13,11 @@
 #include "tensorflow/lite/version.h"
 #include "stm32l475e_iot01_accelero.h"
 #include "mbed_rpc.h"
+#include "MQTTNetwork.h"
+#include "MQTTmbed.h"
+#include "MQTTClient.h"
+
+#define PI 3.14159265
 
 // Initialize a pins to perform analog and digital output functions
 // Adjust analog output pin name to your board spec.
@@ -21,22 +26,78 @@ InterruptIn btn(USER_BUTTON);
 DigitalOut led1(LED1);
 DigitalOut led2(LED2);
 DigitalOut led3(LED3);
-
-Thread gesT,mqtt_thread;
+Thread gesT,t,btn_th;
 int mode=1;
 int angle[6]={15,20,25,30,35,40};
 int n=10;
 int UI_state=1;
-EventQueue gesture_queue,mqtt_queue;
+EventQueue gesture_queue,mqtt_queue,queue,btn_queue;
 BufferedSerial pc(USBTX, USBRX);
-#define PI 3.14159265
+int msg_mode=0;
+int gesture_mode=1;
+//WIFI
+WiFiInterface *wifi;
+volatile int message_num = 0;
+volatile int arrivedcount = 0;
+volatile bool closed = false;
+const char* topic = "Mbed";
+Thread mqtt_thread(osPriorityHigh);
+
+void messageArrived(MQTT::MessageData& md) {
+    MQTT::Message &message = md.message;
+    char msg[300];
+    printf(msg);
+    ThisThread::sleep_for(100ms);
+    char payload[300];
+    sprintf(payload, "Payload :%.*s\r\n", message.payloadlen, (char*)message.payload);
+    printf(payload);
+    ++arrivedcount;
+}
+void close_mqtt() {
+    closed = true;
+}
+void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
+    led3=!led3;
+    MQTT::Message message;
+    char buff[100];
+    switch(msg_mode){
+        case 1: 
+            switch(mode){
+                case 0: sprintf(buff, "---close gesture---Selected 15deg maximum angle---"); break; 
+                case 1: sprintf(buff, "---close gesture---Selected 20deg maximum angle---"); break;
+                case 2: sprintf(buff, "---close gesture---Selected 25deg maximum angle---"); break;
+                case 3: sprintf(buff, "---close gesture---Selected 30deg maximum angle---"); break;
+                case 4: sprintf(buff, "---close gesture---Selected 35deg maximum angle---"); break;
+                case 5: sprintf(buff, "---close gesture---Selected 40deg maximum angle---"); break;
+            }   break;
+        case 2:
+            
+            break;     
+
+    }
+    message.qos = MQTT::QOS0;
+    message.retained = false;
+    message.dup = false;
+    message.payload = (void*) buff;
+    message.payloadlen = strlen(buff) + 1;
+    int rc = client->publish(topic, message);
+    close_mqtt();
+    gesture_mode=0;
+    // printf("rc:  %d\r\n", rc);
+    printf("Puslish message: %s\r\n", buff);
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////////
 
 // Create an area of memory to use for input, output, and intermediate arrays.
 // The size of this will depend on the model you're using, and may need to be
 // determined by experimentation.
 constexpr int kTensorArenaSize = 60 * 1024;
 uint8_t tensor_arena[kTensorArenaSize];
-int gesture_mode=1;
 
 // Return the result of the last prediction
 int PredictGesture(float* output) {
@@ -76,11 +137,6 @@ int PredictGesture(float* output) {
     last_predict = -1;
 
     return this_predict;
-}
-
-void publish_angle(){
-    led3=!led3;
-    gesture_mode = 0;
 }
 
 void gesture_display(){
@@ -142,8 +198,7 @@ void change_mode(int mode_in){
         }
     }
 }
-void gesture()
-{
+void gesture_tf(){
     while(gesture_mode){
         gesture_display();
         ThisThread::sleep_for(1s);
@@ -259,11 +314,73 @@ void gesture()
             mode=4;
         if(mode_temp!=mode)
             change_mode(mode);
-        btn.fall(mqtt_queue.event(publish_angle));
+        
     
         }
     }
     ThisThread::sleep_for(100ms);
+}
+int gesture()
+{
+    msg_mode=1;
+    wifi = WiFiInterface::get_default_instance();
+    if (!wifi) {
+            printf("ERROR: No WiFiInterface found.\r\n");
+            return -1;
+    }
+    printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
+    int ret = wifi->connect(MBED_CONF_APP_WIFI_SSID, MBED_CONF_APP_WIFI_PASSWORD, NSAPI_SECURITY_WPA_WPA2);
+    if (ret != 0) {
+            printf("\nConnection error: %d\r\n", ret);
+            return -1;
+    }
+    NetworkInterface* net = wifi;
+    MQTTNetwork mqttNetwork(net);
+    MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
+    //TODO: revise host to your IP
+    const char* host = "192.168.0.107";
+    printf("Connecting to TCP network...\r\n");
+
+    SocketAddress sockAddr;
+    sockAddr.set_ip_address(host);
+    sockAddr.set_port(1883);
+
+    printf("address is %s/%d\r\n", (sockAddr.get_ip_address() ? sockAddr.get_ip_address() : "None"),  (sockAddr.get_port() ? sockAddr.get_port() : 0) ); //check setting
+
+    int rc = mqttNetwork.connect(sockAddr);//(host, 1883);
+    if (rc != 0) {
+            printf("Connection error.");
+            return -1;
+    }
+    printf("Successfully connected!\r\n");
+
+    MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
+    data.MQTTVersion = 3;
+    data.clientID.cstring = "Mbed";
+
+    if ((rc = client.connect(data)) != 0){
+            printf("Fail to connect MQTT\r\n");
+    }
+    if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
+            printf("Fail to subscribe\r\n");
+    }
+    mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
+    btn.rise(mqtt_queue.event(&publish_message,&client));
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    printf("starting gesture_tf");
+    queue.call(gesture_tf);
+
+    int num = 0;
+    while (num != 5) {
+            client.yield(100);
+            ++num;
+    }
+
+    while (1) {
+            if (closed) break;
+            client.yield(500);
+            ThisThread::sleep_for(500ms);
+    }
     uLCD.cls();
 }
 void gesture_activate(Arguments *in, Reply *out){
@@ -271,11 +388,10 @@ void gesture_activate(Arguments *in, Reply *out){
     gesture_mode = 1;
     led2=1;
     led1=1;
-    // mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
-    // gesT.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
     gesture_queue.call(gesture);
 }
 void gesture_terminate(Arguments *in, Reply *out){
+    gesture_mode = 0;
     led2=0;
     led1=0;
     uLCD.cls();
@@ -288,7 +404,6 @@ RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
 RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
 
 //////////////////////////////////////////////////////////////////////////////////////////
-
 
 Thread tiltT;
 Thread acce_thread;
@@ -341,7 +456,6 @@ void tilt_angle(){
         ThisThread::sleep_for(100ms);
     }
 }
-
 void tilt_op(){
     init_angle_confirm=0;
     uLCD.cls();
@@ -365,7 +479,6 @@ void tilt_op(){
     ThisThread::sleep_for(100ms);
     uLCD.cls();
 }
-
 void tilt_activate(Arguments *in, Reply *out){
     tiltT.start(callback(&tilt_queue, &EventQueue::dispatch_forever));
     tilt_queue.call(tilt_op);
@@ -381,6 +494,10 @@ void tilt_terminate(Arguments *in, Reply *out){
 RPCFunction rpcTiltActive(&tilt_activate, "tilt_activate");
 RPCFunction rpcTiltDeactive(&tilt_terminate, "tilt_terminate");
 
+///////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////////
+
 int main(){
 
     uLCD.locate(0,1);
@@ -388,7 +505,6 @@ int main(){
     uLCD.locate(0,2);
     uLCD.printf("Angle = %d",angle[mode]);
 
-    mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
     gesT.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
 
     // receive commands, and send back the responses
@@ -409,6 +525,8 @@ int main(){
         RPC::call(buf, outbuf);
         printf("%s\r\n", outbuf);
     }
-
+    
+    return 0;
 
 }
+
