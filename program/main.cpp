@@ -35,6 +35,7 @@ EventQueue gesture_queue,mqtt_queue,queue,btn_queue;
 BufferedSerial pc(USBTX, USBRX);
 int msg_mode=0;
 int gesture_mode=1;
+
 //WIFI
 WiFiInterface *wifi;
 volatile int message_num = 0;
@@ -42,6 +43,17 @@ volatile int arrivedcount = 0;
 volatile bool closed = false;
 const char* topic = "Mbed";
 Thread mqtt_thread(osPriorityHigh);
+
+//TILT
+Thread tiltT;
+Thread acce_thread;
+EventQueue tilt_queue;
+EventQueue acce_queue;
+double tilt_angle_deg=0, ref_angle_deg=0;
+int16_t pDataXYZ_tilt[3] = {0}, init_pDataXYZ_tilt[3]={999,999,999};
+int running = 1;
+int over_max_times=0;
+int init_angle_confirm=0;
 
 void messageArrived(MQTT::MessageData& md) {
     MQTT::Message &message = md.message;
@@ -71,7 +83,7 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
                 case 5: sprintf(buff, "---close gesture---Selected 40deg maximum angle---"); break;
             }   break;
         case 2:
-            
+            sprintf(buff, "---none---Angle over threshold #%d---",over_max_times); break; 
             break;     
 
     }
@@ -86,8 +98,6 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
     // printf("rc:  %d\r\n", rc);
     printf("Puslish message: %s\r\n", buff);
 }
-
-
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -404,16 +414,8 @@ RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
 RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
 
 //////////////////////////////////////////////////////////////////////////////////////////
+int tilt_msg=0;
 
-Thread tiltT;
-Thread acce_thread;
-EventQueue tilt_queue;
-EventQueue acce_queue;
-double tilt_angle_deg=0, ref_angle_deg=0;
-int16_t pDataXYZ_tilt[3] = {0}, init_pDataXYZ_tilt[3]={999,999,999};
-int running = 1;
-int over_max_times=0;
-int init_angle_confirm=0;
 void tilt_init(){
     BSP_ACCELERO_AccGetXYZ(init_pDataXYZ_tilt);
     double ref_angle_rad = acos ( init_pDataXYZ_tilt[2]/ sqrt( pow(init_pDataXYZ_tilt[0],2) + pow(init_pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
@@ -440,6 +442,7 @@ void tilt_angle(){
         uLCD.printf("%3d", int(tilting)); 
 
         if(tilting>=angle[mode]) {
+            tilt_msg=1;
             uLCD.text_width(1); 
             uLCD.text_height(1);
             uLCD.locate(0,0);
@@ -467,7 +470,8 @@ void tilt_op(){
         uLCD.text_height(2);
         uLCD.locate(1,0);
         uLCD.printf("PUSH\n BUTTON\n TO\n INIT"); 
-        btn.fall(tilt_init);
+        // btn.fall(tilt_init);
+        btn.rise(mqtt_queue.event(&tilt_init));
     }
     uLCD.cls();
     uLCD.text_width(1); 
@@ -477,6 +481,69 @@ void tilt_op(){
     over_max_times=0;
     tilt_angle();
     ThisThread::sleep_for(100ms);
+    uLCD.cls();
+}
+int tilt_wifi(){
+    msg_mode=2;
+    wifi = WiFiInterface::get_default_instance();
+    if (!wifi) {
+            printf("ERROR: No WiFiInterface found.\r\n");
+            return -1;
+    }
+    printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
+    int ret = wifi->connect(MBED_CONF_APP_WIFI_SSID, MBED_CONF_APP_WIFI_PASSWORD, NSAPI_SECURITY_WPA_WPA2);
+    if (ret != 0) {
+            printf("\nConnection error: %d\r\n", ret);
+            return -1;
+    }
+    NetworkInterface* net = wifi;
+    MQTTNetwork mqttNetwork(net);
+    MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
+    //TODO: revise host to your IP
+    const char* host = "192.168.0.107";
+    printf("Connecting to TCP network...\r\n");
+    ///////////////////////////////////////////////////////////
+    SocketAddress sockAddr;
+    sockAddr.set_ip_address(host);
+    sockAddr.set_port(1883);
+    printf("address is %s/%d\r\n", (sockAddr.get_ip_address() ? sockAddr.get_ip_address() : "None"),  (sockAddr.get_port() ? sockAddr.get_port() : 0) ); //check setting
+    int rc = mqttNetwork.connect(sockAddr);//(host, 1883);
+    if (rc != 0) {
+            printf("Connection error.");
+            return -1;
+    }
+    printf("Successfully connected!\r\n");
+    MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
+    data.MQTTVersion = 3;
+    data.clientID.cstring = "Mbed";
+    if ((rc = client.connect(data)) != 0){
+            printf("Fail to connect MQTT\r\n");
+    }
+    if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
+            printf("Fail to subscribe\r\n");
+    }
+    
+    mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    printf("starting tilt_op");
+    queue.call(tilt_op);
+
+    int num = 0;
+    while (num != 5) {
+            client.yield(100);
+            ++num;
+    }
+
+    while (1) {
+            if (tilt_msg) {
+                mqtt_queue.event(&publish_message,&client);
+                // ThisThread::sleep_for(250ms);
+                tilt_msg=0;
+            }
+            if (closed) break;
+            client.yield(500);
+            ThisThread::sleep_for(500ms);
+    }
     uLCD.cls();
 }
 void tilt_activate(Arguments *in, Reply *out){

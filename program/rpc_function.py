@@ -2,19 +2,16 @@ import serial
 import paho.mqtt.client as paho
 import time
 import threading
-serdev = '/dev/ttyACM2'
+serdev = '/dev/ttyACM4'
 s = serial.Serial(serdev, 9600)
 
 
 def terminate_gesture():
     s.write(bytes("/gesture_terminate/run\r", 'UTF-8'))
-    # line=s.readline() # Read an echo string from mbed terminated with '\n' (putc())
-    # print(line)
-    # line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC reply)
-    # print(line)
     time.sleep(1)
 
 def activate_gesture():
+    print('Please wait for wifi to connect')
     s.write(bytes("/gesture_activate/run\r", 'UTF-8'))
     time.sleep(1)
 
@@ -29,19 +26,23 @@ def activate_tilt():
 ###############################################################################################
 
 mqttc = paho.Client()
-host = "192.168.0.104"
+host = "192.168.0.107"
 topic = "Mbed"
 
 def on_connect(self, mosq, obj, rc):
     print("Connected rc: " + str(rc))
 
 def on_message(mosq, obj, msg):
-    print('msg:'+msg.topic)
+    # print('msg:'+msg.topic)
     split = str(msg.payload).split('---')
+    print(split[2])
     if len(split)>1:
-        print(split)
+        print(split[2])
         if(split[1]=='close gesture'):
+            time.sleep(1)
+            print('Closing Gesture UI')
             terminate_gesture()
+            print('\nWhich mode? (gesture/tilt/exit) ')
     else:
         print(split[0])
 
