@@ -26,6 +26,8 @@ InterruptIn btn(USER_BUTTON);
 DigitalOut led1(LED1);
 DigitalOut led2(LED2);
 DigitalOut led3(LED3);
+// InterruptIn tilt_signal(D9);
+// DigitalOut tilt_out(D10);
 Thread gesT,t,btn_th;
 int mode=1;
 int angle[6]={15,20,25,30,35,40};
@@ -40,7 +42,7 @@ int gesture_mode=1;
 WiFiInterface *wifi;
 volatile int message_num = 0;
 volatile int arrivedcount = 0;
-volatile bool closed = false;
+int closed = 0;
 const char* topic = "Mbed";
 Thread mqtt_thread(osPriorityHigh);
 
@@ -66,7 +68,7 @@ void messageArrived(MQTT::MessageData& md) {
     ++arrivedcount;
 }
 void close_mqtt() {
-    closed = true;
+    closed = 0;
 }
 void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
     led3=!led3;
@@ -93,10 +95,10 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
     message.payload = (void*) buff;
     message.payloadlen = strlen(buff) + 1;
     int rc = client->publish(topic, message);
-    close_mqtt();
+    if (msg_mode==1)    close_mqtt();
     gesture_mode=0;
     // printf("rc:  %d\r\n", rc);
-    printf("Puslish message: %s\r\n", buff);
+    // printf("Puslish message: %s\r\n", buff);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -385,7 +387,6 @@ int gesture()
             client.yield(100);
             ++num;
     }
-
     while (1) {
             if (closed) break;
             client.yield(500);
@@ -415,7 +416,7 @@ RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
 
 //////////////////////////////////////////////////////////////////////////////////////////
 int tilt_msg=0;
-
+int tilting=0;
 void tilt_init(){
     BSP_ACCELERO_AccGetXYZ(init_pDataXYZ_tilt);
     double ref_angle_rad = acos ( init_pDataXYZ_tilt[2]/ sqrt( pow(init_pDataXYZ_tilt[0],2) + pow(init_pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
@@ -427,7 +428,7 @@ void tilt_angle(){
         BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
         double tilt_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
         tilt_angle_deg = tilt_angle_rad  * 180.0 / PI;
-        int tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
+        tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
         uLCD.text_width(2); 
         uLCD.text_height(2);
         uLCD.locate(1,1);
@@ -443,6 +444,7 @@ void tilt_angle(){
 
         if(tilting>=angle[mode]) {
             tilt_msg=1;
+            printf("over\n");
             uLCD.text_width(1); 
             uLCD.text_height(1);
             uLCD.locate(0,0);
@@ -453,10 +455,11 @@ void tilt_angle(){
             uLCD.text_width(2); 
             uLCD.text_height(2);
             ThisThread::sleep_for(1s);
+            
         }
-        if(over_max_times==5) running=0;
+        if(over_max_times==5) {running=0;close_mqtt();}
         // if(tilting>=angle[mode]) running = 0;
-        ThisThread::sleep_for(100ms);
+        ThisThread::sleep_for(70ms);
     }
 }
 void tilt_op(){
@@ -486,20 +489,20 @@ void tilt_op(){
 int tilt_wifi(){
     msg_mode=2;
     wifi = WiFiInterface::get_default_instance();
-    if (!wifi) {
-            printf("ERROR: No WiFiInterface found.\r\n");
-            return -1;
-    }
-    printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
+    // if (!wifi) {
+    //         printf("ERROR: No WiFiInterface found.\r\n");
+    //         return -1;
+    // }
+    // printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
     int ret = wifi->connect(MBED_CONF_APP_WIFI_SSID, MBED_CONF_APP_WIFI_PASSWORD, NSAPI_SECURITY_WPA_WPA2);
-    if (ret != 0) {
-            printf("\nConnection error: %d\r\n", ret);
-            return -1;
-    }
+    // if (ret != 0) {
+    //         printf("\nConnection error: %d\r\n", ret);
+    //         return -1;
+    // }
     NetworkInterface* net = wifi;
     MQTTNetwork mqttNetwork(net);
     MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
-    //TODO: revise host to your IP
+    // //TODO: revise host to your IP
     const char* host = "192.168.0.107";
     printf("Connecting to TCP network...\r\n");
     ///////////////////////////////////////////////////////////
@@ -508,47 +511,48 @@ int tilt_wifi(){
     sockAddr.set_port(1883);
     printf("address is %s/%d\r\n", (sockAddr.get_ip_address() ? sockAddr.get_ip_address() : "None"),  (sockAddr.get_port() ? sockAddr.get_port() : 0) ); //check setting
     int rc = mqttNetwork.connect(sockAddr);//(host, 1883);
-    if (rc != 0) {
-            printf("Connection error.");
-            return -1;
-    }
+    // if (rc != 0) {
+    //         printf("Connection error.");
+    //         return -1;
+    // }
     printf("Successfully connected!\r\n");
     MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
     data.MQTTVersion = 3;
     data.clientID.cstring = "Mbed";
-    if ((rc = client.connect(data)) != 0){
-            printf("Fail to connect MQTT\r\n");
-    }
-    if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
-            printf("Fail to subscribe\r\n");
-    }
+    // if ((rc = client.connect(data)) != 0){
+    //         printf("Fail to connect MQTT\r\n");
+    // }
+    // if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
+    //         printf("Fail to subscribe\r\n");
+    // }
     
     mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
+    // tilt_signal.rise(mqtt_queue.event(&publish_message,&client));
     t.start(callback(&queue, &EventQueue::dispatch_forever));
-    printf("starting tilt_op");
+    printf("starting tilt_op\n");
     queue.call(tilt_op);
-
-    int num = 0;
-    while (num != 5) {
-            client.yield(100);
-            ++num;
-    }
-
+    tilt_msg=1;
+    printf("out msg\n");
+    closed=0;
     while (1) {
-            if (tilt_msg) {
-                mqtt_queue.event(&publish_message,&client);
-                // ThisThread::sleep_for(250ms);
-                tilt_msg=0;
-            }
-            if (closed) break;
-            client.yield(500);
-            ThisThread::sleep_for(500ms);
+        if (closed) break;
+        // if(tilting>=angle[mode])
+        // if(tilt_msg==1){
+        //     // mqtt_queue.event(&publish_message,&client);
+        //     printf("in t msg\n");
+        //     publish_message(&client);
+        //     tilt_msg=0;
+        // }
+        printf("not close msg\n");
+        ThisThread::sleep_for(500ms);
+        client.yield(100);
+        ThisThread::sleep_for(500ms);
     }
     uLCD.cls();
 }
 void tilt_activate(Arguments *in, Reply *out){
     tiltT.start(callback(&tilt_queue, &EventQueue::dispatch_forever));
-    tilt_queue.call(tilt_op);
+    tilt_queue.call(tilt_wifi);
 }
 void tilt_terminate(Arguments *in, Reply *out){
     led2=0;
