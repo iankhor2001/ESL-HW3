@@ -2,7 +2,7 @@ import serial
 import paho.mqtt.client as paho
 import time
 import threading
-serdev = '/dev/ttyACM4'
+serdev = '/dev/ttyACM0'
 s = serial.Serial(serdev, 9600)
 
 
@@ -11,7 +11,6 @@ def terminate_gesture():
     time.sleep(1)
 
 def activate_gesture():
-    print('Please wait for wifi to connect')
     s.write(bytes("/gesture_activate/run\r", 'UTF-8'))
     time.sleep(1)
 
@@ -26,7 +25,7 @@ def activate_tilt():
 ###############################################################################################
 
 mqttc = paho.Client()
-host = "192.168.0.107"
+host = "192.168.0.103"
 topic = "Mbed"
 
 def on_connect(self, mosq, obj, rc):
@@ -37,11 +36,15 @@ def on_message(mosq, obj, msg):
     split = str(msg.payload).split('---')
     print(split[2])
     if len(split)>1:
-        print(split[2])
         if(split[1]=='close gesture'):
             time.sleep(1)
             print('Closing Gesture UI')
             terminate_gesture()
+            print('\nWhich mode? (gesture/tilt/exit) ')
+        elif(split[1]=='close tilt'):
+            time.sleep(1)
+            print('Closing Tilt Detection UI')
+            terminate_tilt()
             print('\nWhich mode? (gesture/tilt/exit) ')
     else:
         print(split[0])
@@ -71,28 +74,28 @@ mqtt_thread = threading.Thread(target=mqtt_loop, daemon=True)
 mqtt_thread.start()
 ############################################################################################
 
-# s.write(bytes("\r", 'UTF-8'))
-# line=s.readline() # Read an echo string from mbed terminated with '\n' (putc())
-# print(line)
-# line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC reply)
-# print(line)
+s.write(bytes("\r", 'UTF-8'))
+line=s.readline() # Read an echo string from mbed terminated with '\n' (putc())
+print(line)
+line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC reply)
+print(line)
 time.sleep(1)
 while(1):
     action = input('\nWhich mode? (gesture/tilt/exit) ')
 
     if action == 'gesture':
-        gesture_action = input('Activate or Terminate? (a/t)\nIf terminate, press USER_BTN first! ')
-        if gesture_action == 'a':
+        # gesture_action = input('Activate or Terminate? (a/t)\nIf terminate, press USER_BTN first! ')
+        # if gesture_action == 'a':
             activate_gesture()
-        elif gesture_action == 't':
-            terminate_gesture()
+        # elif gesture_action == 't':
+        #     terminate_gesture()
 
     elif action == 'tilt':
-        tilt_action = input('Activate or Terminate? (a/t) ')
-        if tilt_action == 'a':
+        # tilt_action = input('Activate or Terminate? (a/t) ')
+        # if tilt_action == 'a':
             activate_tilt()
-        elif tilt_action == 't':
-            terminate_tilt()
+        # elif tilt_action == 't':
+        #     terminate_tilt()
 
     elif action == 'exit':
         print('Exiting Python')

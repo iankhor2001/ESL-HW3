@@ -2,6 +2,7 @@
 #include "uLCD_4DGL.h"
 #include "TFconfig.h"
 #include <cmath>
+#include <math.h>
 #include "magic_wand_model_data.h"
 #include "accelerometer_handler.h"
 #include "tensorflow/lite/c/common.h"
@@ -28,12 +29,12 @@ DigitalOut led2(LED2);
 DigitalOut led3(LED3);
 // InterruptIn tilt_signal(D9);
 // DigitalOut tilt_out(D10);
-Thread gesT,t,btn_th;
+Thread gesT,t,btn_th,wifi_thread,tiltT,acce_thread;
+EventQueue gesture_queue,mqtt_queue,queue,btn_queue,wifi_queue,tilt_queue,acce_queue;
 int mode=1;
 int angle[6]={15,20,25,30,35,40};
 int n=10;
 int UI_state=1;
-EventQueue gesture_queue,mqtt_queue,queue,btn_queue;
 BufferedSerial pc(USBTX, USBRX);
 int msg_mode=0;
 int gesture_mode=1;
@@ -47,15 +48,15 @@ const char* topic = "Mbed";
 Thread mqtt_thread(osPriorityHigh);
 
 //TILT
-Thread tiltT;
-Thread acce_thread;
-EventQueue tilt_queue;
-EventQueue acce_queue;
 double tilt_angle_deg=0, ref_angle_deg=0;
 int16_t pDataXYZ_tilt[3] = {0}, init_pDataXYZ_tilt[3]={999,999,999};
 int running = 1;
 int over_max_times=0;
 int init_angle_confirm=0;
+int send_msg=0;
+int tilt_msg=0;
+int tilting=0;
+double tilt_angle_rad = 0;
 
 void messageArrived(MQTT::MessageData& md) {
     MQTT::Message &message = md.message;
@@ -67,42 +68,52 @@ void messageArrived(MQTT::MessageData& md) {
     printf(payload);
     ++arrivedcount;
 }
-void close_mqtt() {
-    closed = 0;
-}
 void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
-    led3=!led3;
-    MQTT::Message message;
-    char buff[100];
-    switch(msg_mode){
-        case 1: 
-            switch(mode){
-                case 0: sprintf(buff, "---close gesture---Selected 15deg maximum angle---"); break; 
-                case 1: sprintf(buff, "---close gesture---Selected 20deg maximum angle---"); break;
-                case 2: sprintf(buff, "---close gesture---Selected 25deg maximum angle---"); break;
-                case 3: sprintf(buff, "---close gesture---Selected 30deg maximum angle---"); break;
-                case 4: sprintf(buff, "---close gesture---Selected 35deg maximum angle---"); break;
-                case 5: sprintf(buff, "---close gesture---Selected 40deg maximum angle---"); break;
-            }   break;
-        case 2:
-            sprintf(buff, "---none---Angle over threshold #%d---",over_max_times); break; 
-            break;     
+    printf("Msg thread start\n");
+    while(1){
+        if(send_msg==1){
+            printf("sending_msg\n");
+            led3=!led3;
+            MQTT::Message message;
+            char buff[100];
+            switch(msg_mode){
+                case 1: 
+                    gesture_mode=0;
+                    switch(mode){
+                        case 0: sprintf(buff, "---close gesture---Selected 15deg maximum angle---"); break; 
+                        case 1: sprintf(buff, "---close gesture---Selected 20deg maximum angle---"); break;
+                        case 2: sprintf(buff, "---close gesture---Selected 25deg maximum angle---"); break;
+                        case 3: sprintf(buff, "---close gesture---Selected 30deg maximum angle---"); break;
+                        case 4: sprintf(buff, "---close gesture---Selected 35deg maximum angle---"); break;
+                        case 5: sprintf(buff, "---close gesture---Selected 40deg maximum angle---"); break;
+                    }   break;
+                case 2:
+                    sprintf(buff, "---none---! Angle over threshold #%d. Angle: %d---",over_max_times,int(tilting));  
+                    break;     
+                case 3:
+                    sprintf(buff, "---close tilt---Threshold Reached. Closing Tilt Function.---");  
+                    break;  
+                case 4:
+                    sprintf(buff, "---none---Tilt Rad: %f - Angle: %d deg---",tilt_angle_rad,int(tilting));  
+                    break;     
+            }
+            message.qos = MQTT::QOS0;
+            message.retained = false;
+            message.dup = false;
+            message.payload = (void*) buff;
+            message.payloadlen = strlen(buff) + 1;
+            int rc = client->publish(topic, message);
 
+            // printf("rc:  %d\r\n", rc);
+            // printf("Puslish message: %s\r\n", buff);
+            send_msg=0;
+        }
+        ThisThread::sleep_for(500ms);    
     }
-    message.qos = MQTT::QOS0;
-    message.retained = false;
-    message.dup = false;
-    message.payload = (void*) buff;
-    message.payloadlen = strlen(buff) + 1;
-    int rc = client->publish(topic, message);
-    if (msg_mode==1)    close_mqtt();
-    gesture_mode=0;
-    // printf("rc:  %d\r\n", rc);
-    // printf("Puslish message: %s\r\n", buff);
 }
-
-///////////////////////////////////////////////////////////////////////////////////////////
-
+void msg_activate(){
+    send_msg=1;
+}
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 // Create an area of memory to use for input, output, and intermediate arrays.
@@ -150,7 +161,6 @@ int PredictGesture(float* output) {
 
     return this_predict;
 }
-
 void gesture_display(){
     uLCD.locate(0,0);
     uLCD.printf("Gesture Mode");
@@ -211,6 +221,7 @@ void change_mode(int mode_in){
     }
 }
 void gesture_tf(){
+    printf("IN gesture_tf\n");
     while(gesture_mode){
         gesture_display();
         ThisThread::sleep_for(1s);
@@ -335,6 +346,151 @@ void gesture_tf(){
 int gesture()
 {
     msg_mode=1;
+    btn_th.start(callback(&btn_queue, &EventQueue::dispatch_forever));
+    btn.rise(btn_queue.event(msg_activate));
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    printf("starting gesture_tf\n");
+    queue.call(gesture_tf);
+    ThisThread::sleep_for(1s);
+    printf("Called gesture_tf\n");
+    while(gesture_mode){
+        ThisThread::sleep_for(500ms);
+    }
+}
+void gesture_activate(Arguments *in, Reply *out){
+    uLCD.cls();
+    gesture_mode = 1;
+    led2=1;
+    led1=1;
+    gesture_queue.call(gesture);
+}
+void gesture_terminate(Arguments *in, Reply *out){
+    gesture_mode = 0;
+    led2=0;
+    led1=0;
+    uLCD.cls();
+    uLCD.locate(0,1);
+    uLCD.printf("gesture");
+    uLCD.locate(0,2);
+    uLCD.printf("Angle = %d",angle[mode]);
+}
+RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
+RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+void tilt_init(){
+    printf("IN tilt_init\n");
+    BSP_ACCELERO_Init();
+    BSP_ACCELERO_AccGetXYZ(init_pDataXYZ_tilt);
+    printf("Angle: %d,%d,%d\n",init_pDataXYZ_tilt[0],int(init_pDataXYZ_tilt[1]),int(init_pDataXYZ_tilt[2]));
+    double ref_angle_rad = acos ( init_pDataXYZ_tilt[2]/ sqrt( pow(init_pDataXYZ_tilt[0],2) + pow(init_pDataXYZ_tilt[1],2) + pow(init_pDataXYZ_tilt[2],2) ) );
+    ref_angle_deg = ref_angle_rad  * 180.0 / PI;
+    printf("Ref Angle: %f, %d\n",ref_angle_rad,ref_angle_deg);
+    ThisThread::sleep_for(500ms);
+}
+void tilt_angle(){
+    printf("IN tilt_angle\n");
+    BSP_ACCELERO_Init();
+    while(running){
+        msg_mode=4;
+        BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
+        tilt_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
+        tilt_angle_deg = tilt_angle_rad  * 180.0 / PI;
+        tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
+        printf("Tilt Rad: %f - Angle: %d\n",tilt_angle_rad,int(tilting));
+        uLCD.text_width(2); 
+        uLCD.text_height(2);
+        uLCD.locate(1,1);
+        uLCD.printf("Max: %d", angle[mode]);
+        uLCD.text_width(3); 
+        uLCD.text_height(3);
+        uLCD.locate(1,2);
+        uLCD.printf("deg:"); 
+        uLCD.locate(1,3);
+        if(tilting>=angle[mode]) uLCD.color(RED);
+        else uLCD.color(GREEN);
+        uLCD.printf("%3d", int(tilting)); 
+        if(tilting>=angle[mode]) {
+            msg_mode=2;
+            send_msg=1;
+            printf("over\n");
+            uLCD.text_width(1); 
+            uLCD.text_height(1);
+            uLCD.locate(0,0);
+            uLCD.color(RED);
+            uLCD.printf("OVER #%d", over_max_times);
+            over_max_times=over_max_times+1;
+            uLCD.color(GREEN);
+            uLCD.text_width(2); 
+            uLCD.text_height(2);
+            ThisThread::sleep_for(1s);
+        }
+        else {
+            send_msg=1;
+        }
+        if(over_max_times==5) {
+            running=0;
+            msg_mode=3;
+            send_msg=1;
+        }
+        ThisThread::sleep_for(70ms);
+    }
+    printf("OUT tilt_angle\n");
+}
+void tilt_op(){
+    printf("IN tilt_op\n");
+    init_angle_confirm=3;
+    uLCD.cls();
+    running = 1;
+    BSP_ACCELERO_Init();
+    led2=1;
+    while(init_angle_confirm!=0){
+        uLCD.text_width(2); 
+        uLCD.text_height(2);
+        uLCD.locate(1,1);
+        uLCD.printf("Place\n on\n surface.\n%ds",init_angle_confirm); 
+        init_angle_confirm=init_angle_confirm-1;
+        ThisThread::sleep_for(1s);
+    }
+    tilt_init();
+    uLCD.cls();
+    uLCD.text_width(1); 
+    uLCD.text_height(1);
+    uLCD.locate(1,0);
+    uLCD.printf("ref: %d,%d,%d", init_pDataXYZ_tilt[0],init_pDataXYZ_tilt[1],init_pDataXYZ_tilt[2]); 
+    over_max_times=0;
+    tilt_angle();
+    ThisThread::sleep_for(100ms);
+    printf("OUT tilt_op\n");
+}
+int tilt_wifi(){
+    msg_mode=4;
+    printf("starting tilt_op\n");
+    tilt_op();
+    ThisThread::sleep_for(100ms);
+    printf("out tilt_wifi\n");
+    return 0;
+}
+void tilt_activate(Arguments *in, Reply *out){
+    tilt_queue.call(tilt_wifi);
+    printf("out tilt_RPC\n");
+    ThisThread::sleep_for(100ms);
+}
+void tilt_terminate(Arguments *in, Reply *out){
+    led2=0;
+    uLCD.cls();
+    uLCD.locate(0,1);
+    uLCD.printf("MENU");
+    uLCD.locate(0,2);
+    uLCD.printf("Angle = %d",angle[mode]);
+}
+RPCFunction rpcTiltActive(&tilt_activate, "tilt_activate");
+RPCFunction rpcTiltDeactive(&tilt_terminate, "tilt_terminate");
+
+///////////////////////////////////////////////////////////////////////////////////////////
+
+int wifi_f(){
     wifi = WiFiInterface::get_default_instance();
     if (!wifi) {
             printf("ERROR: No WiFiInterface found.\r\n");
@@ -350,7 +506,7 @@ int gesture()
     MQTTNetwork mqttNetwork(net);
     MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
     //TODO: revise host to your IP
-    const char* host = "192.168.0.107";
+    const char* host = "192.168.0.103";
     printf("Connecting to TCP network...\r\n");
 
     SocketAddress sockAddr;
@@ -375,13 +531,11 @@ int gesture()
     }
     if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
             printf("Fail to subscribe\r\n");
-    }
+    }    
+    
     mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
-    btn.rise(mqtt_queue.event(&publish_message,&client));
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
-    printf("starting gesture_tf");
-    queue.call(gesture_tf);
-
+    mqtt_queue.call(publish_message, &client);
+    
     int num = 0;
     while (num != 5) {
             client.yield(100);
@@ -392,180 +546,7 @@ int gesture()
             client.yield(500);
             ThisThread::sleep_for(500ms);
     }
-    uLCD.cls();
 }
-void gesture_activate(Arguments *in, Reply *out){
-    uLCD.cls();
-    gesture_mode = 1;
-    led2=1;
-    led1=1;
-    gesture_queue.call(gesture);
-}
-void gesture_terminate(Arguments *in, Reply *out){
-    gesture_mode = 0;
-    led2=0;
-    led1=0;
-    uLCD.cls();
-    uLCD.locate(0,1);
-    uLCD.printf("gesture");
-    uLCD.locate(0,2);
-    uLCD.printf("Angle = %d",angle[mode]);
-}
-RPCFunction rpcGestureActive(&gesture_activate, "gesture_activate");
-RPCFunction rpcGestureDeactive(&gesture_terminate, "gesture_terminate");
-
-//////////////////////////////////////////////////////////////////////////////////////////
-int tilt_msg=0;
-int tilting=0;
-void tilt_init(){
-    BSP_ACCELERO_AccGetXYZ(init_pDataXYZ_tilt);
-    double ref_angle_rad = acos ( init_pDataXYZ_tilt[2]/ sqrt( pow(init_pDataXYZ_tilt[0],2) + pow(init_pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
-    ref_angle_deg = ref_angle_rad  * 180.0 / PI;
-    init_angle_confirm=1;
-}
-void tilt_angle(){
-    while(running){
-        BSP_ACCELERO_AccGetXYZ(pDataXYZ_tilt);
-        double tilt_angle_rad = acos ( pDataXYZ_tilt[2]/ sqrt( pow(pDataXYZ_tilt[0],2) + pow(pDataXYZ_tilt[1],2) + pow(pDataXYZ_tilt[2],2) ) );
-        tilt_angle_deg = tilt_angle_rad  * 180.0 / PI;
-        tilting = int( abs( tilt_angle_deg - ref_angle_deg ) );
-        uLCD.text_width(2); 
-        uLCD.text_height(2);
-        uLCD.locate(1,1);
-        uLCD.printf("Max: %d", angle[mode]);
-        uLCD.text_width(3); 
-        uLCD.text_height(3);
-        uLCD.locate(1,2);
-        uLCD.printf("deg:"); 
-        uLCD.locate(1,3);
-        if(tilting>=angle[mode]) uLCD.color(RED);
-        else uLCD.color(GREEN);
-        uLCD.printf("%3d", int(tilting)); 
-
-        if(tilting>=angle[mode]) {
-            tilt_msg=1;
-            printf("over\n");
-            uLCD.text_width(1); 
-            uLCD.text_height(1);
-            uLCD.locate(0,0);
-            uLCD.color(RED);
-            uLCD.printf("OVER #%d", over_max_times);
-            over_max_times=over_max_times+1;
-            uLCD.color(GREEN);
-            uLCD.text_width(2); 
-            uLCD.text_height(2);
-            ThisThread::sleep_for(1s);
-            
-        }
-        if(over_max_times==5) {running=0;close_mqtt();}
-        // if(tilting>=angle[mode]) running = 0;
-        ThisThread::sleep_for(70ms);
-    }
-}
-void tilt_op(){
-    init_angle_confirm=0;
-    uLCD.cls();
-    running = 1;
-    BSP_ACCELERO_Init();
-    led2=1;
-    while(init_angle_confirm==0){
-        uLCD.text_width(2); 
-        uLCD.text_height(2);
-        uLCD.locate(1,0);
-        uLCD.printf("PUSH\n BUTTON\n TO\n INIT"); 
-        // btn.fall(tilt_init);
-        btn.rise(mqtt_queue.event(&tilt_init));
-    }
-    uLCD.cls();
-    uLCD.text_width(1); 
-    uLCD.text_height(1);
-    uLCD.locate(1,0);
-    uLCD.printf("ref: %d,%d,%d", init_pDataXYZ_tilt[0],init_pDataXYZ_tilt[1],init_pDataXYZ_tilt[2]); 
-    over_max_times=0;
-    tilt_angle();
-    ThisThread::sleep_for(100ms);
-    uLCD.cls();
-}
-int tilt_wifi(){
-    msg_mode=2;
-    wifi = WiFiInterface::get_default_instance();
-    // if (!wifi) {
-    //         printf("ERROR: No WiFiInterface found.\r\n");
-    //         return -1;
-    // }
-    // printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
-    int ret = wifi->connect(MBED_CONF_APP_WIFI_SSID, MBED_CONF_APP_WIFI_PASSWORD, NSAPI_SECURITY_WPA_WPA2);
-    // if (ret != 0) {
-    //         printf("\nConnection error: %d\r\n", ret);
-    //         return -1;
-    // }
-    NetworkInterface* net = wifi;
-    MQTTNetwork mqttNetwork(net);
-    MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
-    // //TODO: revise host to your IP
-    const char* host = "192.168.0.107";
-    printf("Connecting to TCP network...\r\n");
-    ///////////////////////////////////////////////////////////
-    SocketAddress sockAddr;
-    sockAddr.set_ip_address(host);
-    sockAddr.set_port(1883);
-    printf("address is %s/%d\r\n", (sockAddr.get_ip_address() ? sockAddr.get_ip_address() : "None"),  (sockAddr.get_port() ? sockAddr.get_port() : 0) ); //check setting
-    int rc = mqttNetwork.connect(sockAddr);//(host, 1883);
-    // if (rc != 0) {
-    //         printf("Connection error.");
-    //         return -1;
-    // }
-    printf("Successfully connected!\r\n");
-    MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-    data.MQTTVersion = 3;
-    data.clientID.cstring = "Mbed";
-    // if ((rc = client.connect(data)) != 0){
-    //         printf("Fail to connect MQTT\r\n");
-    // }
-    // if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
-    //         printf("Fail to subscribe\r\n");
-    // }
-    
-    mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
-    // tilt_signal.rise(mqtt_queue.event(&publish_message,&client));
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
-    printf("starting tilt_op\n");
-    queue.call(tilt_op);
-    tilt_msg=1;
-    printf("out msg\n");
-    closed=0;
-    while (1) {
-        if (closed) break;
-        // if(tilting>=angle[mode])
-        // if(tilt_msg==1){
-        //     // mqtt_queue.event(&publish_message,&client);
-        //     printf("in t msg\n");
-        //     publish_message(&client);
-        //     tilt_msg=0;
-        // }
-        printf("not close msg\n");
-        ThisThread::sleep_for(500ms);
-        client.yield(100);
-        ThisThread::sleep_for(500ms);
-    }
-    uLCD.cls();
-}
-void tilt_activate(Arguments *in, Reply *out){
-    tiltT.start(callback(&tilt_queue, &EventQueue::dispatch_forever));
-    tilt_queue.call(tilt_wifi);
-}
-void tilt_terminate(Arguments *in, Reply *out){
-    led2=0;
-    uLCD.cls();
-    uLCD.locate(0,1);
-    uLCD.printf("MENU");
-    uLCD.locate(0,2);
-    uLCD.printf("Angle = %d",angle[mode]);
-}
-RPCFunction rpcTiltActive(&tilt_activate, "tilt_activate");
-RPCFunction rpcTiltDeactive(&tilt_terminate, "tilt_terminate");
-
-///////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -575,8 +556,9 @@ int main(){
     uLCD.printf("MENU");
     uLCD.locate(0,2);
     uLCD.printf("Angle = %d",angle[mode]);
-
+    wifi_thread.start(wifi_f);
     gesT.start(callback(&gesture_queue, &EventQueue::dispatch_forever));
+    tiltT.start(callback(&tilt_queue, &EventQueue::dispatch_forever));
 
     // receive commands, and send back the responses
     char buf[256], outbuf[256];
@@ -596,7 +578,6 @@ int main(){
         RPC::call(buf, outbuf);
         printf("%s\r\n", outbuf);
     }
-    
     return 0;
 
 }
