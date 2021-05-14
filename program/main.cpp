@@ -88,7 +88,7 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
                         case 5: sprintf(buff, "---close gesture---Selected 40deg maximum angle---"); break;
                     }   break;
                 case 2:
-                    sprintf(buff, "---none---! Angle over threshold #%d. Angle: %d---",over_max_times,int(tilting));  
+                    sprintf(buff, "---none---! Angle over threshold #%d. Angle: %d deg---",over_max_times,int(tilting));  
                     break;     
                 case 3:
                     sprintf(buff, "---close tilt---Threshold Reached. Closing Tilt Function.---");  
@@ -345,6 +345,7 @@ void gesture_tf(){
 }
 int gesture()
 {
+    led1=1;
     msg_mode=1;
     btn_th.start(callback(&btn_queue, &EventQueue::dispatch_forever));
     btn.rise(btn_queue.event(msg_activate));
@@ -356,18 +357,16 @@ int gesture()
     while(gesture_mode){
         ThisThread::sleep_for(500ms);
     }
+    led1=0;
+    return 0;
 }
 void gesture_activate(Arguments *in, Reply *out){
     uLCD.cls();
     gesture_mode = 1;
-    led2=1;
-    led1=1;
     gesture_queue.call(gesture);
 }
 void gesture_terminate(Arguments *in, Reply *out){
     gesture_mode = 0;
-    led2=0;
-    led1=0;
     uLCD.cls();
     uLCD.locate(0,1);
     uLCD.printf("gesture");
@@ -444,8 +443,8 @@ void tilt_op(){
     uLCD.cls();
     running = 1;
     BSP_ACCELERO_Init();
-    led2=1;
     while(init_angle_confirm!=0){
+        led1=1;
         uLCD.text_width(2); 
         uLCD.text_height(2);
         uLCD.locate(1,1);
@@ -454,6 +453,7 @@ void tilt_op(){
         ThisThread::sleep_for(1s);
     }
     tilt_init();
+    led1=0;
     uLCD.cls();
     uLCD.text_width(1); 
     uLCD.text_height(1);
@@ -465,11 +465,13 @@ void tilt_op(){
     printf("OUT tilt_op\n");
 }
 int tilt_wifi(){
+    led2=1;
     msg_mode=4;
     printf("starting tilt_op\n");
     tilt_op();
     ThisThread::sleep_for(100ms);
     printf("out tilt_wifi\n");
+    led2=0;
     return 0;
 }
 void tilt_activate(Arguments *in, Reply *out){
@@ -478,7 +480,6 @@ void tilt_activate(Arguments *in, Reply *out){
     ThisThread::sleep_for(100ms);
 }
 void tilt_terminate(Arguments *in, Reply *out){
-    led2=0;
     uLCD.cls();
     uLCD.locate(0,1);
     uLCD.printf("MENU");

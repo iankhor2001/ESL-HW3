@@ -4,13 +4,15 @@ import time
 import threading
 serdev = '/dev/ttyACM0'
 s = serial.Serial(serdev, 9600)
-
+msg_mode = 1
 
 def terminate_gesture():
     s.write(bytes("/gesture_terminate/run\r", 'UTF-8'))
     time.sleep(1)
 
 def activate_gesture():
+    msg_mode = 0
+    print("Opening Gesture UI")
     s.write(bytes("/gesture_activate/run\r", 'UTF-8'))
     time.sleep(1)
 
@@ -19,6 +21,8 @@ def terminate_tilt():
     time.sleep(1)
 
 def activate_tilt():
+    msg_mode = 0
+    print("Opening Tilt UI")
     s.write(bytes("/tilt_activate/run\r", 'UTF-8'))
     time.sleep(1)
 
@@ -34,17 +38,19 @@ def on_connect(self, mosq, obj, rc):
 def on_message(mosq, obj, msg):
     # print('msg:'+msg.topic)
     split = str(msg.payload).split('---')
-    print(split[2])
+    print('Msg: '+split[2])
     if len(split)>1:
         if(split[1]=='close gesture'):
             time.sleep(1)
             print('Closing Gesture UI')
             terminate_gesture()
+            msg_mode=1
             print('\nWhich mode? (gesture/tilt/exit) ')
         elif(split[1]=='close tilt'):
             time.sleep(1)
             print('Closing Tilt Detection UI')
             terminate_tilt()
+            msg_mode=1
             print('\nWhich mode? (gesture/tilt/exit) ')
     else:
         print(split[0])
@@ -80,27 +86,20 @@ print(line)
 line=s.readline() # Read an echo string from mbed terminated with '\n' (RPC reply)
 print(line)
 time.sleep(1)
-while(1):
-    action = input('\nWhich mode? (gesture/tilt/exit) ')
 
+while(1):
+    action = input('\nWhich mode? (gesture/tilt/exit) \n')
     if action == 'gesture':
-        # gesture_action = input('Activate or Terminate? (a/t)\nIf terminate, press USER_BTN first! ')
-        # if gesture_action == 'a':
             activate_gesture()
-        # elif gesture_action == 't':
-        #     terminate_gesture()
+            msg_mode=0
 
     elif action == 'tilt':
-        # tilt_action = input('Activate or Terminate? (a/t) ')
-        # if tilt_action == 'a':
             activate_tilt()
-        # elif tilt_action == 't':
-        #     terminate_tilt()
+            msg_mode=0
 
     elif action == 'exit':
         print('Exiting Python')
         break
-    
     else:
         print('Try again!\n')
 
